@@ -58,6 +58,7 @@ func init() {
 
 	rootCmd.AddCommand(newServeCmd())
 	rootCmd.AddCommand(newDownloadCmd())
+	rootCmd.AddCommand(newVersionCmd())
 }
 
 func initConfig() {
