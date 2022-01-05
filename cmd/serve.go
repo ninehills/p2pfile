@@ -18,6 +18,7 @@ func newServeCmd() *cobra.Command {
 		Long: `DHT-based P2P file distribution command line tools. Usage:
 
 p2pfile serve <FILE_PATH1> <FILE_PATH2> ...`,
+		Args: cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// TODO: 写入这里才生效，需要改进
 			initLogger(viper.GetBool("debug"))
