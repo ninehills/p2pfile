@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	log "github.com/sirupsen/logrus"
+	apimachinery_net "k8s.io/apimachinery/pkg/util/net"
 )
 
 func GetAvailablePort(portRange string) (int, error) {
@@ -62,4 +63,8 @@ func isPortAvailable(port int) bool {
 		return false
 	}
 	return true
+}
+
+func getPublicIP() (net.IP, error) {
+	return apimachinery_net.ChooseHostInterface()
 }

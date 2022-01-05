@@ -103,7 +103,7 @@ func NewTorrentServer(mode string, ip string, port int, portRange string, peers 
 	log.Infof("NewTorrentServer: %s, %s, %d, %v, %f, %f, %t, %v, %v", mode, ip, port, peers, uploadLimit, downloadLimit, debug, torrents, files)
 	server := TorrentServer{}
 	clientConfig := torrent.NewDefaultClientConfig()
-	clientConfig.DisableIPv6 = true
+	clientConfig.DisableIPv6 = false
 	clientConfig.DisableAcceptRateLimiting = true
 	clientConfig.DisableTrackers = true
 	clientConfig.NoDHT = false
@@ -118,6 +118,13 @@ func NewTorrentServer(mode string, ip string, port int, portRange string, peers 
 	var publicIp net.IP
 	if ip != "" {
 		publicIp = net.ParseIP(ip)
+	} else {
+		publicIp, err = getPublicIP()
+		if err != nil {
+			log.Fatalf("failed to get default public ip: %s")
+		} else {
+			log.Infof("get default public ip: %s", publicIp)
+		}
 	}
 
 	if port == 0 {
@@ -131,16 +138,11 @@ func NewTorrentServer(mode string, ip string, port int, portRange string, peers 
 	}
 	clientConfig.PublicIp4 = publicIp
 	clientConfig.ListenPort = port
-	var localAddr string
-	if ip != "" {
-		localAddr = fmt.Sprintf("%s:%d", publicIp, port)
-	} else {
-		localAddr = fmt.Sprintf("%s:%d", "127.0.0.1", port)
-	}
+	localAddr := fmt.Sprintf("%s:%d", publicIp, port)
 	clientConfig.SetListenAddr(fmt.Sprintf(":%d", port))
 	// 不使用 Public 的 DHT Starting Nodes，如果配置了 peer，则使用 peer，否则留空。
-	// 问题是如果没有 peer，就组成不了DHT 网络，有大量的错误信息。
-	// 解决办法就是将自身的 IP 加入到 Staring Nodes 中，这样就可以组成1节点的 DHT 网络。
+	// 问题是如果没有 peer，就组成不了 DHT 网络，有大量的错误信息。
+	// 解决办法就是将自身的 IP 加入到 Staring Nodes 中，这样就可以组成 1 节点的 DHT 网络。
 	clientConfig.DhtStartingNodes = func(network string) dht.StartingNodesGetter {
 		return func() ([]dht.Addr, error) {
 			var addrs []dht.Addr
