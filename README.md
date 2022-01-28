@@ -27,8 +27,8 @@
 ```txt
 Simple P2P file distribution CLI. For example:
 
-p2pfile serve <FILE_PATH1> <FILE_PATH2> ...
-p2pfile download <MAGNET_URI> <MAGNET_URI2> ...
+p2pfile serve <FILE_PATH>
+p2pfile download <MAGNET_URI>
 
 Usage:
   p2pfile [command]
@@ -38,19 +38,16 @@ Available Commands:
   download    Download file from magnet uri.
   help        Help about any command
   serve       creates and seeds a torrent from filepaths.
+  version     Print the version
 
 Flags:
-      --config string          config file (default is $HOME/.p2pfile.yaml)
-      --ip string              Set ip. (default: default route ip)
-      --port int               Set port. (default: random port in port-range,  See --port-range)
-      --port-range string      Set random port range. (default: 42070-42099) (default "42070-42099")
-      --peers strings          Set bootstrap peers. (default: empty) (eg: --peers 10.1.1.1:2233,10.2.2.2:4567
-      --upload-limit float     Set upload limit, MiB. (default: 0.0)
-      --download-limit float   Set download limit, MiB. (default: 0.0)
-      --debug                  Debug mode.
-  -h, --help                   help for p2pfile
-
-Use "p2pfile [command] --help" for more information about a command.
+      --config string               config file (default is $HOME/.p2pfile.yaml)
+      --tracker-ip string           Set tracker ip. (default: default route ip)
+      --tracker-port int            Set tracker port. (default: random port in port-range,  See --port-range)
+      --tracker-port-range string   Set tracker random port range. (default: 42070-42099) (default "42070-42099")
+      --dir string                  Set download dir. (default: .)
+      --debug                       Debug mode.
+  -h, --help                        help for p2pfile
 ```
 
 ## 其他设计
@@ -82,7 +79,6 @@ D. 任务中断恢复：
 2. tracker ha
 3. multi file
 4. download and upload speed limit
-5. support set download directory
 
 ## 参考资料
 
