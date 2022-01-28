@@ -1,358 +1,183 @@
-// Lots of code is copied from project [torrent](https://github.com/anacrolix/torrent).
-// Project torrent is under MPL 2.0 license, and is compatible with GPLv3.
+// Lots of code is copied from project [rain](https://github.com/cenkalti/rain/blob/master/main.go).
+// Project torrent is under MIT license, and is compatible with GPLv3.
 
 package libtorrent
 
 import (
-	"context"
-	"errors"
-	"expvar"
 	"fmt"
-	"net"
-	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
-	"github.com/anacrolix/dht/v2"
-	"github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/bencode"
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/storage"
-	"github.com/davecgh/go-spew/spew"
-	"github.com/dustin/go-humanize"
+	"github.com/cenkalti/rain/torrent"
+	"github.com/ninehills/p2pfile/pkg/magnet"
+	"github.com/ninehills/p2pfile/pkg/metainfo"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
 )
 
-func torrentBar(t *torrent.Torrent, pieceStates bool) {
-	go func() {
-		start := time.Now()
-		if t.Info() == nil {
-			fmt.Printf("%v: getting torrent info for %q\n", time.Since(start), t.Name())
-			<-t.GotInfo()
-		}
-		lastStats := t.Stats()
-		var lastLine string
-		interval := 3 * time.Second
-		for range time.Tick(interval) {
-			var completedPieces, partialPieces int
-			psrs := t.PieceStateRuns()
-			for _, r := range psrs {
-				if r.Complete {
-					completedPieces += r.Length
-				}
-				if r.Partial {
-					partialPieces += r.Length
-				}
-			}
-			stats := t.Stats()
-			byteRate := int64(time.Second)
-			byteRate *= stats.BytesReadUsefulData.Int64() - lastStats.BytesReadUsefulData.Int64()
-			byteRate /= int64(interval)
-			line := fmt.Sprintf(
-				"%v: downloading %q: %s/%s, %d/%d pieces completed (%d partial): %v/s\n",
-				time.Since(start),
-				t.Name(),
-				humanize.Bytes(uint64(t.BytesCompleted())),
-				humanize.Bytes(uint64(t.Length())),
-				completedPieces,
-				t.NumPieces(),
-				partialPieces,
-				humanize.Bytes(uint64(byteRate)),
-			)
-			if line != lastLine {
-				lastLine = line
-				os.Stdout.WriteString(line)
-			}
-			if pieceStates {
-				fmt.Println(psrs)
-			}
-			lastStats = stats
-		}
-	}()
-}
+func RunTorrentServer(target string, dataDir string, isSeed bool, isResume bool) error {
+	cfg := torrent.DefaultConfig
+	cfg.RPCEnabled = false
+	cfg.DHTEnabled = false
+	cfg.DataDir = dataDir
+	cfg.DataDirIncludesTorrentID = false
 
-type stringAddr string
-
-func (stringAddr) Network() string   { return "" }
-func (me stringAddr) String() string { return string(me) }
-
-func resolveTestPeers(addrs []string) (ret []torrent.PeerInfo) {
-	for _, ta := range addrs {
-		ret = append(ret, torrent.PeerInfo{
-			Addr: stringAddr(ta),
-		})
-	}
-	return
-}
-
-type TorrentServer struct {
-	clientConfig *torrent.ClientConfig
-	client       *torrent.Client
-
-	peers     []string
-	torrents  []string
-	files     []string
-	localAddr string
-}
-
-func NewTorrentServer(mode string, ip string, port int, portRange string, peers []string, uploadLimit float64, downloadLimit float64, debug bool, torrents []string, files []string) (TorrentServer, error) {
-	var err error
-	log.Infof("NewTorrentServer: %s, %s, %d, %v, %f, %f, %t, %v, %v", mode, ip, port, peers, uploadLimit, downloadLimit, debug, torrents, files)
-	server := TorrentServer{}
-	clientConfig := torrent.NewDefaultClientConfig()
-	clientConfig.DisableIPv6 = false
-	clientConfig.DisableAcceptRateLimiting = true
-	clientConfig.DisableTrackers = true
-	clientConfig.NoDHT = false
-	clientConfig.Debug = debug
-	if mode == "download" {
-		// TODO: download mode support seeding.
-		clientConfig.Seed = false
-	} else {
-		clientConfig.Seed = true
+	if isSeed {
+		// 做种的节点调大连接数等配置
+		cfg.UnchokedPeers = 100
+		cfg.OptimisticUnchokedPeers = 10
+		cfg.MaxRequestsIn = 2000
+		cfg.MaxRequestsOut = 2000
+		cfg.DefaultRequestsOut = 1000
+		cfg.EndgameMaxDuplicateDownloads = 20
+		cfg.MaxPeerDial = 1000
+		cfg.MaxPeerAccept = 500
+		cfg.MaxPeerAddresses = 20000
 	}
 
-	var publicIp net.IP
-	if ip != "" {
-		publicIp = net.ParseIP(ip)
-	} else {
-		publicIp, err = getPublicIP()
+	var ih torrent.InfoHash
+	var resumeFile string
+	if isURI(target) {
+		magnet, err := magnet.New(target)
 		if err != nil {
-			log.Fatalf("failed to get default public ip: %s")
-		} else {
-			log.Infof("get default public ip: %s", publicIp)
+			return err
 		}
-	}
-
-	if port == 0 {
-		// TODO: 使用随机端口会导致 serve 服务重启后原 magnet uri 失效
-		port, err = GetAvailablePort(portRange)
+		ih = torrent.InfoHash(magnet.InfoHash)
+		resumeFile = magnet.Name + ".resume"
+	} else {
+		f, err := os.Open(target)
 		if err != nil {
-			log.Fatalf("Couldn't get available port: %v", err)
-		} else {
-			log.Infof("Founded available port: %v", port)
+			return err
+		}
+		defer f.Close()
+		mi, err := metainfo.New(f)
+		if err != nil {
+			return err
+		}
+		_ = f.Close()
+		ih = mi.Info.Hash
+		resumeFile = mi.Info.Name + ".resume"
+	}
+	if !isResume {
+		if _, err := os.Stat(resumeFile); !os.IsNotExist(err) {
+			log.Infof("Not enable resume, so remove resume file: %s", resumeFile)
+			if err := os.Remove(resumeFile); err != nil {
+				return err
+			}
 		}
 	}
-	clientConfig.PublicIp4 = publicIp
-	clientConfig.ListenPort = port
-	localAddr := fmt.Sprintf("%s:%d", publicIp, port)
-	clientConfig.SetListenAddr(fmt.Sprintf(":%d", port))
-	// 不使用 Public 的 DHT Starting Nodes，如果配置了 peer，则使用 peer，否则留空。
-	// 问题是如果没有 peer，就组成不了 DHT 网络，有大量的错误信息。
-	// 解决办法就是将自身的 IP 加入到 Staring Nodes 中，这样就可以组成 1 节点的 DHT 网络。
-	clientConfig.DhtStartingNodes = func(network string) dht.StartingNodesGetter {
-		return func() ([]dht.Addr, error) {
-			var addrs []dht.Addr
-			for _, p := range peers {
-				addr, err := net.ResolveUDPAddr("udp", p)
-				if err != nil {
-					return addrs, fmt.Errorf("peer %v not resolved: %v", p, err)
-				}
-				addrs = append(addrs, dht.NewAddr(addr))
-			}
-			addr, err := net.ResolveUDPAddr("udp", localAddr)
+	cfg.Database = resumeFile
+
+	ses, err := torrent.NewSession(cfg)
+	if err != nil {
+		return err
+	}
+	defer ses.Close()
+	var t *torrent.Torrent
+	torrents := ses.ListTorrents()
+	if len(torrents) > 0 && torrents[0].InfoHash() == ih {
+		// Resume data exists
+		t = torrents[0]
+		err = t.Start()
+	} else {
+		// Add as new torrent
+		opt := &torrent.AddTorrentOptions{
+			StopAfterDownload: !isSeed,
+		}
+		if isURI(target) {
+			t, err = ses.AddURI(target, opt)
+		} else {
+			var f *os.File
+			f, err = os.Open(target)
 			if err != nil {
-				return addrs, fmt.Errorf("self addr %v not resolved: %v", addr, err)
+				return err
 			}
-			addrs = append(addrs, dht.NewAddr(addr))
-			return addrs, nil
+			t, err = ses.AddTorrent(f, opt)
+			f.Close()
 		}
 	}
-
-	if uploadLimit > 0 {
-		log.Printf("Upload speed limit: %v MiB/s", uploadLimit)
-		clientConfig.UploadRateLimiter = rate.NewLimiter(rate.Limit(uploadLimit*1024*1024), 256<<10)
-	}
-
-	if downloadLimit > 0 {
-		log.Printf("Download speed limit: %v MiB/s", downloadLimit)
-		clientConfig.DownloadRateLimiter = rate.NewLimiter(rate.Limit(downloadLimit*1024*1024), 256<<10)
-	}
-
-	client, err := torrent.NewClient(clientConfig)
-
 	if err != nil {
-		return server, fmt.Errorf("creating client: %w", err)
+		return err
 	}
-
-	server.client = client
-	server.clientConfig = clientConfig
-	server.peers = peers
-	server.torrents = torrents
-	server.files = files
-	server.localAddr = localAddr
-	return server, nil
-}
-
-func (td *TorrentServer) AddTorrent() error {
-	peers := resolveTestPeers(td.peers)
-	for _, arg := range td.torrents {
-		t, err := func() (*torrent.Torrent, error) {
-			if strings.HasPrefix(arg, "magnet:") {
-				t, err := td.client.AddMagnet(arg)
-				if err != nil {
-					return nil, fmt.Errorf("error adding magnet: %w", err)
-				}
-				return t, nil
-			} else if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
-				response, err := http.Get(arg)
-				if err != nil {
-					return nil, fmt.Errorf("error downloading torrent file: %s", err)
-				}
-
-				metaInfo, err := metainfo.Load(response.Body)
-				defer response.Body.Close()
-				if err != nil {
-					return nil, fmt.Errorf("error loading torrent file %q: %s", arg, err)
-				}
-				t, err := td.client.AddTorrent(metaInfo)
-				if err != nil {
-					return nil, fmt.Errorf("adding torrent: %w", err)
-				}
-				return t, nil
-			} else if strings.HasPrefix(arg, "infohash:") {
-				t, _ := td.client.AddTorrentInfoHash(metainfo.NewHashFromHex(strings.TrimPrefix(arg, "infohash:")))
-				return t, nil
-			} else {
-				metaInfo, err := metainfo.LoadFromFile(arg)
-				if err != nil {
-					return nil, fmt.Errorf("error loading torrent file %q: %s", arg, err)
-				}
-				t, err := td.client.AddTorrent(metaInfo)
-				if err != nil {
-					return nil, fmt.Errorf("adding torrent: %w", err)
-				}
-				return t, nil
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	for {
+		select {
+		case s := <-ch:
+			log.Infof("received %s, stopping server", s)
+			err = t.Stop()
+			if err != nil {
+				return err
 			}
-		}()
-		if err != nil {
-			return fmt.Errorf("adding torrent for %q: %w", arg, err)
+		case <-time.After(time.Second):
+			stats := t.Stats()
+			progress := 0
+			if stats.Bytes.Total > 0 {
+				progress = int((stats.Bytes.Completed * 100) / stats.Bytes.Total)
+			}
+			eta := "?"
+			if stats.ETA != nil {
+				eta = stats.ETA.String()
+			}
+			log.Infof("Status: %s, Progress: %d%%, Peers: %d, Speed: %dK/s, ETA: %s\n", stats.Status.String(), progress, stats.Peers.Total, stats.Speed.Download/1024, eta)
+		case err = <-t.NotifyStop():
+			if _, err := os.Stat(resumeFile); !os.IsNotExist(err) {
+				os.Remove(resumeFile)
+			}
+			return err
 		}
-
-		torrentBar(t, false)
-		log.Printf("added peer: %v", peers)
-		t.AddPeers(peers)
-		go func() {
-			<-t.GotInfo()
-			if len(td.files) == 0 {
-				t.DownloadAll()
-			} else {
-				for _, f := range t.Files() {
-					for _, fileArg := range td.files {
-						if f.DisplayPath() == fileArg {
-							f.Download()
-						}
-					}
-				}
-			}
-		}()
 	}
-	return nil
 }
 
-func (td *TorrentServer) outputStats() {
-	expvar.Do(func(kv expvar.KeyValue) {
-		fmt.Printf("%s: %s\n", kv.Key, kv.Value)
-	})
-	td.client.WriteStatus(os.Stdout)
-}
-
-func (td *TorrentServer) RunDownloader(ctx context.Context) error {
-	err := td.AddTorrent()
-	started := time.Now()
-	if err != nil {
-		return fmt.Errorf("adding torrents error: %w", err)
-	}
-	// defer td.outputStats()
-	go func() {
-		<-ctx.Done()
-		td.Shutdown()
-	}()
-	if td.client.WaitAll() {
-		log.Print("downloaded ALL the torrents")
-	} else {
-		err = errors.New("some torrents were not downloaded successfully")
-	}
-	clientConnStats := td.client.ConnStats()
-	log.Printf("average download rate: %v",
-		humanize.Bytes(uint64(
-			time.Duration(
-				clientConnStats.BytesReadUsefulData.Int64(),
-			)*time.Second/time.Since(started),
-		)))
-
-	spew.Dump(expvar.Get("torrent").(*expvar.Map).Get("chunks received"))
-	spew.Dump(td.client.ConnStats())
-	clStats := td.client.ConnStats()
-	sentOverhead := clStats.BytesWritten.Int64() - clStats.BytesWrittenData.Int64()
-	log.Printf(
-		"client read %v, %.1f%% was useful data. sent %v non-data bytes",
-		humanize.Bytes(uint64(clStats.BytesRead.Int64())),
-		100*float64(clStats.BytesReadUsefulData.Int64())/float64(clStats.BytesRead.Int64()),
-		humanize.Bytes(uint64(sentOverhead)))
-	td.Shutdown()
-	return err
-}
-
-func (td *TorrentServer) Shutdown() {
-	log.Infof("shutting down torrent server...")
-	// In certain situations, close was being called more than once.
-	select {
-	case <-td.client.Closed():
-	default:
-		td.client.Close()
-	}
-	log.Infof("torrent server shut down")
-}
-
-func (td *TorrentServer) RunServer(ctx context.Context) error {
+// @param files: include this file or directory in torrent
+// @param out: save generated torrent to this `FILE`
+// @param root: file paths given become relative to the root
+// @param name: set name of torrent. required if you specify more than one file.
+// @param private: create torrent for private trackers
+// @param pieceLength: override default piece length. by default, piece length calculated automatically based on the total size of files. given in KB. must be multiple of 16.
+// @param comment: set comment of torrent
+// @param trackers: add tracker `URL`
+// @param webseeds: add web seed `URL`
+func CreateTorrent(files []string, out string, root string, name string, private bool, pieceLength int, comment string, trackers []string, webseeds []string) (string, error) {
 	var err error
-	peers := append(td.peers, td.localAddr)
-	peersStr := strings.Join(peers[:], ",")
-	for _, file := range td.files {
-		info := metainfo.Info{
-			PieceLength: 1 << 18,
-		}
-		err = info.BuildFromFilePath(file)
-		if err != nil {
-			return fmt.Errorf("building info from path %q: %w", file, err)
-		}
-		mi := metainfo.MetaInfo{
-			InfoBytes: bencode.MustMarshal(info),
-		}
-		pc, err := storage.NewDefaultPieceCompletionForDir(".")
-		if err != nil {
-			return fmt.Errorf("new piece completion: %w", err)
-		}
-		defer pc.Close()
-		ih := mi.HashInfoBytes()
-		to, _ := td.client.AddTorrentOpt(torrent.AddTorrentOpts{
-			InfoHash: ih,
-			Storage: storage.NewFileOpts(storage.NewFileClientOpts{
-				ClientBaseDir: file,
-				FilePathMaker: func(opts storage.FilePathMakerOpts) string {
-					return filepath.Join(opts.File.Path...)
-				},
-				TorrentDirMaker: nil,
-				PieceCompletion: pc,
-			}),
-		})
-		defer to.Drop()
-		err = to.MergeSpec(&torrent.TorrentSpec{
-			InfoBytes: mi.InfoBytes,
-			Trackers:  [][]string{{}},
-		})
-		if err != nil {
-			return fmt.Errorf("setting trackers: %w", err)
-		}
-		fmt.Printf("file: %q\n", file)
-		fmt.Printf("uri: magnet:?xt=urn:btih:%s&dn=name&x.pe=%s\n", ih, peersStr)
+	tiers := make([][]string, len(trackers))
+	for i, tr := range trackers {
+		tiers[i] = []string{tr}
 	}
-	<-ctx.Done()
-	// FIXME: sever shutdown call client.Close(), it's panic.
-	// td.Shutdown()
-	return ctx.Err()
+
+	info, err := metainfo.NewInfoBytes(root, files, private, uint32(pieceLength<<10), name)
+	if err != nil {
+		return "", err
+	}
+	mi, err := metainfo.NewBytes(info, tiers, webseeds, comment)
+	if err != nil {
+		return "", err
+	}
+	log.Infof("Created torrent size: %d bytes", len(mi))
+	f, err := os.Create(out)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.Write(mi)
+	if err != nil {
+		return "", err
+	}
+
+	i, err := metainfo.NewInfo(info)
+	if err != nil {
+		return "", err
+	}
+
+	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=%s", string(i.HashString()), i.Name)
+	trackersEscaped := make([]string, len(trackers))
+	for _, s := range trackers {
+		trackersEscaped = append(trackersEscaped, url.QueryEscape(s))
+	}
+	if len(trackersEscaped) > 0 {
+		magnet += strings.Join(trackersEscaped, "&tr=")
+	}
+	return magnet, f.Close()
 }

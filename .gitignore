@@ -17,3 +17,5 @@
 *.torrent.db*
 
 dist/
+
+.DS_Store

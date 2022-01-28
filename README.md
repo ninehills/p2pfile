@@ -1,4 +1,4 @@
-# p2pfile - DHT-based P2P file distribution command line tools
+# p2pfile - Simple P2P file distribution CLI
 
 ## 背景
 
@@ -10,7 +10,8 @@
 
 ### 设计限制
 
-- 不支持 Tracker，只支持 DHT 网络，从而简化设计。
+- DHT 网络中在这种环境下意义不大，所以不使用 DHT 网络，而是使用自带的集中 Tracker
+  - 在第一个测试版本使用纯 DHT 网络，发现其交换效率低于 Tracker.
 - 不需要 Daemon 常驻进程，只需要单个二进制文件。
 - 无加密设计
 - 只支持单个文件分发，不支持文件夹分发。
@@ -24,7 +25,7 @@
 ## 命令行设计
 
 ```txt
-DHT-based P2P file distribution command line tools. For example:
+Simple P2P file distribution CLI. For example:
 
 p2pfile serve <FILE_PATH1> <FILE_PATH2> ...
 p2pfile download <MAGNET_URI> <MAGNET_URI2> ...
@@ -56,38 +57,35 @@ Use "p2pfile [command] --help" for more information about a command.
 
 A. Magnet URI schema（使用了[BEP0009](http://www.bittorrent.org/beps/bep_0009.html) 扩展）
 
-`magnet:?xt=urn:btih:<info-hash>&dn=<name>&x.pe=<peer-address>`
+`magnet:?xt=urn:btih:<info-hash>&dn=<name>&tr=<tracker>&x.pe=<peer-address>`
 
 - `info-hash`: 哈希值，用于标识文件
-- `name`: 文件名[可选]
-- `peer-address`: 做种机器的Peer地址，用于初始化 DHT 网络
+- `name`: 文件名 [可选]
+- `peer-address`: 做种机器的 Peer 地址，用于初始化 DHT 网络
+- `tracker`: tracker 地址
 
-一台机器并发做种或者下载：
+B. Tracker 高可用性：
 
-- 由于无后台进程，每个进程都是单独的客户端，均需要占用一个端口。
-- 故端口需要支持随机分配，从而避免端口冲突。
-    - 随机分配方法：在端口段中随机选择端口，如果端口被占用，则重新随机选择。
-- 随机分配存在当做种进程重启后，其新的端口号和之前不同。
-    - 方法1：将端口号持久化，当重新serve的时候，使用之前的端口号
-    - 方法2：重新做种的时候，需要传入magnet uri，从中解析出端口号。
-
-B. 做种高可用性：
-
-- 可以使用2+台机器同时做种，做种时增加参数：`--peers=<peer1>,<peer2>` 从而保证Magnet URI的高可用性。
+- 考虑到分发文件只是一次性命令，暂时不考虑
 
 C. 下载后持续做种：
 
-- 增加参数 `--seeding`，指定下载之后持续做种。持续做种结束条件有多个，任意条件满足即停止做种。
-    - `--seeding-time=<time>`，指定持续做种的时间，单位为秒。默认为 60s。
-    - `--seeding-ratio=<ratio>`，指定持续做种的种子分享率，单位为百分比。默认为 1.0。
-- 该参数推荐在大文件分发时使用，小文件分发没必要且不建议使用。
+- 考虑到一次性命令，故不考虑
 
-D. 信息存储：
+D. 任务中断恢复：
 
-- 默认为 SQlite，会在当前目录下生成 `.*db.*` 文件。
-- (后续支持) 支持更换存储后端，比如 bolt/sqlite/file etc.
+- 考虑到一次性命令，故不考虑，下载失败后需要重新下载
 
-E. 库：
+## 后续计划
 
-- <https://github.com/anacrolix/torrent>: 主要使用.
+1. resume download
+2. tracker ha
+3. multi file
+4. download and upload speed limit
+5. support set download directory
+
+## 参考资料
+
+- <https://github.com/anacrolix/torrent>: 第一版参考，因为下载速度较慢，放弃
+- <https://github.com/cenkalti/rain>: 主要引用
 - <https://gitlab.com/axet/libtorrent>: 后续参考实现 14: Local Peers Discovery / 19: WebSeeds.

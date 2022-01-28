@@ -14,11 +14,11 @@ var cfgFile string
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "p2pfile",
-	Short: "DHT-based P2P file distribution command line tools",
-	Long: `DHT-based P2P file distribution command line tools. For example:
+	Short: "Simple P2P file distribution CLI",
+	Long: `Simple P2P file distribution CLI. For example:
 
-p2pfile serve <FILE_PATH1> <FILE_PATH2> ...
-p2pfile download <MAGNET_URI> <MAGNET_URI2> ...`,
+p2pfile serve <FILE_PATH>
+p2pfile download <MAGNET_URI>`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	// Run: func(cmd *cobra.Command, args []string) { },
@@ -40,20 +40,16 @@ func init() {
 	rootCmd.PersistentFlags().SortFlags = false
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.p2pfile.yaml)")
-	rootCmd.PersistentFlags().String("ip", "", "Set ip. (default: default route ip)")
-	rootCmd.PersistentFlags().Int("port", 0, "Set port. (default: random port in port-range,  See --port-range)")
-	rootCmd.PersistentFlags().String("port-range", "42070-42099", "Set random port range. (default: 42070-42099)")
-	rootCmd.PersistentFlags().StringSlice("peers", []string{}, "Set bootstrap peers. (default: empty) (eg: --peers 10.1.1.1:2233,10.2.2.2:4567")
-	rootCmd.PersistentFlags().Float64("upload-limit", 0.0, "Set upload limit, MiB. (default: 0.0)")
-	rootCmd.PersistentFlags().Float64("download-limit", 0.0, "Set download limit, MiB. (default: 0.0)")
+	rootCmd.PersistentFlags().String("tracker-ip", "", "Set tracker ip. (default: default route ip)")
+	rootCmd.PersistentFlags().Int("tracker-port", 0, "Set tracker port. (default: random port in port-range,  See --port-range)")
+	rootCmd.PersistentFlags().String("tracker-port-range", "42070-42099", "Set tracker random port range. (default: 42070-42099)")
+	rootCmd.PersistentFlags().String("dir", "", "Set download dir. (default: .)")
 	rootCmd.PersistentFlags().Bool("debug", false, "Debug mode.")
 
-	viper.BindPFlag("ip", rootCmd.PersistentFlags().Lookup("ip"))
-	viper.BindPFlag("port", rootCmd.PersistentFlags().Lookup("port"))
-	viper.BindPFlag("port-range", rootCmd.PersistentFlags().Lookup("port-range"))
-	viper.BindPFlag("peers", rootCmd.PersistentFlags().Lookup("peers"))
-	viper.BindPFlag("upload-limit", rootCmd.PersistentFlags().Lookup("upload-limit"))
-	viper.BindPFlag("download-limit", rootCmd.PersistentFlags().Lookup("download-limit"))
+	viper.BindPFlag("tracker-ip", rootCmd.PersistentFlags().Lookup("tracker-ip"))
+	viper.BindPFlag("tracker-port", rootCmd.PersistentFlags().Lookup("tracker-port"))
+	viper.BindPFlag("tracker-port-range", rootCmd.PersistentFlags().Lookup("tracker-port-range"))
+	viper.BindPFlag("dir", rootCmd.PersistentFlags().Lookup("dir"))
 	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 
 	rootCmd.AddCommand(newServeCmd())

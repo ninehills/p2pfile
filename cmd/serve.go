@@ -1,11 +1,10 @@
 package cmd
 
 import (
-	"context"
-	"os"
-	"os/signal"
+	"fmt"
 
 	"github.com/ninehills/p2pfile/pkg/libtorrent"
+	"github.com/ninehills/p2pfile/pkg/libtracker"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -15,47 +14,50 @@ func newServeCmd() *cobra.Command {
 	var serveCmd = &cobra.Command{
 		Use:   "serve",
 		Short: "creates and seeds a torrent from filepaths.",
-		Long: `DHT-based P2P file distribution command line tools. Usage:
+		Long: `Simple P2P file distribution CLI. Usage:
 
 p2pfile serve <FILE_PATH1> <FILE_PATH2> ...`,
 		Args: cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// TODO: 写入这里才生效，需要改进
 			initLogger(viper.GetBool("debug"))
-			server, err := libtorrent.NewTorrentServer(
-				"serve", viper.GetString("ip"), viper.GetInt("port"), viper.GetString("port-range"),
-				viper.GetStringSlice("peers"), viper.GetFloat64("upload-limit"),
-				viper.GetFloat64("download-limit"), viper.GetBool("debug"),
-				[]string{}, args,
-			)
+			file := args[0]
+
+			// 1. Start tracker
+			trackerIP, err := libtorrent.GetPublicIP(viper.GetString("tracker-ip"))
 			if err != nil {
-				log.Fatal("Failed to create server: ", err)
+				log.Fatal("Failed to get public ip", err)
 			}
-
-			ctx := context.Background()
-
-			// trap Ctrl+C and call cancel on the context
-			ctx, cancel := context.WithCancel(ctx)
-			c := make(chan os.Signal, 1)
-			signal.Notify(c, os.Interrupt)
-			defer func() {
-				signal.Stop(c)
-				cancel()
-			}()
-			go func() {
-				select {
-				case sig := <-c:
-					log.Errorf("Caught signal %v, shutting down...\n", sig)
-					cancel()
-				case <-ctx.Done():
+			trackerPort := viper.GetInt("tracker-port")
+			if trackerPort == 0 {
+				// TODO: 使用随机端口会导致 serve 服务重启后原 magnet uri 失效
+				trackerPort, err = libtorrent.GetAvailablePort(viper.GetString("tracker-port-range"))
+				if err != nil {
+					log.Fatalf("Couldn't get available port: %v", err)
+				} else {
+					log.Infof("Founded available port: %v", trackerPort)
 				}
-			}()
-			err = server.RunServer(ctx)
-			if err != nil {
-				log.Fatal("Failed to run server: ", err)
 			}
+			log.Infof("Start tracker: http://%s:%d/1/announce ", trackerIP, trackerPort)
+			go libtracker.RunTrackerServer(fmt.Sprintf(":%d", trackerPort))
+
+			// 2. make torrent
+			torrentFile := file + ".torrent"
+			files := []string{file}
+			trackers := []string{fmt.Sprintf("http://%s:%d/1/announce", trackerIP, trackerPort)}
+			log.Infof("Make torrent %s to %s", file, torrentFile)
+			magnet, err := libtorrent.CreateTorrent(files, torrentFile, "", "", false, 0, "", trackers, []string{})
+			if err != nil {
+				log.Fatal("Failed to create torrent: ", err)
+			}
+			log.Infof("Magnet: %s", magnet)
+			// 3. Start torrent uploader
+			err = libtorrent.RunTorrentServer(torrentFile, viper.GetString("dir"), true, false)
+			if err != nil {
+				log.Fatal("Failed to run torrent server: ", err)
+			}
+
 		},
 	}
-	serveCmd.MarkFlagRequired("files")
 	return serveCmd
 }

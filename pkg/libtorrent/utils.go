@@ -65,6 +65,22 @@ func isPortAvailable(port int) bool {
 	return true
 }
 
-func getPublicIP() (net.IP, error) {
-	return apimachinery_net.ChooseHostInterface()
+func GetPublicIP(ip string) (net.IP, error) {
+	var err error
+	var publicIP net.IP
+	if ip != "" {
+		publicIP = net.ParseIP(ip)
+	} else {
+		publicIP, err = apimachinery_net.ChooseHostInterface()
+		if err != nil {
+			log.Fatalf("failed to get default public ip: %v", err)
+		} else {
+			log.Infof("get default public ip: %s", publicIP)
+		}
+	}
+	return publicIP, nil
+}
+
+func isURI(arg string) bool {
+	return strings.HasPrefix(arg, "magnet:") || strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://")
 }
