@@ -19,22 +19,37 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// @param target: 种子文件或 Magnet URI
-// @param dataDir: 下载路径
-// @param isServe: 是否为做种节点，如是则调大连接数等参数。
-// @param isResume: 是否通过 *.resume 文件恢复下载
-// @param maxSeedingSeconds: 下载完成做种的最大时间，超过后做种停止。单位为秒。默认为 0s。
-//			- 如 isServe = true，那么 maxSeedingSeconds 如等于 0，则代表永不停止（此逻辑上层暂时没有使用）
-//			- 如 isServe = false，那么 maxSeedingSeconds 如等于 0，则代表不做种
-// @param seedingAutoStop: 当注册到 Tracker 的所有节点下载完成后，是否自动停止做种。（和 isServe 互斥）
-func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool, maxSeedingSeconds int, seedingAutoStop bool) error {
+type TorrentServer struct {
+	Target string
+	// 下载路径
+	DataDir string
+	// 是否为做种节点，如是则调大连接数等参数。
+	IsServe bool
+	// 是否通过 *.resume 文件恢复下载
+	IsResume bool
+	// 下载完成做种的最大时间，超过后做种停止。单位为秒。默认为 0s。
+	//		- 如 isServe = true，那么 maxSeedingSeconds 如等于 0，则代表永不停止（此逻辑上层暂时没有使用）
+	//		- 如 isServe = false，那么 maxSeedingSeconds 如等于 0，则代表不做种
+	MaxSeedingSeconds int
+	// 当注册到 Tracker 的所有节点下载完成后，是否自动停止做种。（和 isServe 互斥）
+	SeedingAutoStop bool
+	// Global download speed limit in MB/s.
+	SpeedLimitDownload float64
+	// Global upload speed limit in MB/s.
+	SpeedLimitUpload float64
+}
+
+func (s *TorrentServer) Run() error {
+	log.Infof("Starting torrent server with config: %+v", s)
 	cfg := torrent.DefaultConfig
 	cfg.RPCEnabled = false
 	cfg.DHTEnabled = false
-	cfg.DataDir = dataDir
+	cfg.DataDir = s.DataDir
 	cfg.DataDirIncludesTorrentID = false
+	cfg.SpeedLimitDownload = int64(s.SpeedLimitDownload * 1024)
+	cfg.SpeedLimitUpload = int64(s.SpeedLimitUpload * 1024)
 
-	if isServe {
+	if s.IsServe {
 		// 做种的节点调大连接数等配置
 		cfg.UnchokedPeers = 100
 		cfg.OptimisticUnchokedPeers = 10
@@ -46,23 +61,23 @@ func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool
 		cfg.MaxPeerAccept = 500
 		cfg.MaxPeerAddresses = 20000
 
-		if seedingAutoStop {
+		if s.SeedingAutoStop {
 			return fmt.Errorf("seedingAutoStop can't be true when isServe is true")
 		}
 	}
-	enableSeeding := isServe || maxSeedingSeconds > 0
+	enableSeeding := s.IsServe || s.MaxSeedingSeconds > 0
 
 	var ih torrent.InfoHash
 	var resumeFileName string
-	if isURI(target) {
-		magnet, err := magnet.New(target)
+	if isURI(s.Target) {
+		magnet, err := magnet.New(s.Target)
 		if err != nil {
 			return err
 		}
 		ih = torrent.InfoHash(magnet.InfoHash)
 		resumeFileName = magnet.Name + ".resume"
 	} else {
-		f, err := os.Open(target)
+		f, err := os.Open(s.Target)
 		if err != nil {
 			return err
 		}
@@ -75,10 +90,10 @@ func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool
 		ih = mi.Info.Hash
 		resumeFileName = mi.Info.Name + ".resume"
 	}
-	resumeFile := path.Join(dataDir, resumeFileName)
+	resumeFile := path.Join(s.DataDir, resumeFileName)
 	log.Infof("Download resume file: %s, it will be auto delete when download finished.", resumeFile)
 
-	if !isResume {
+	if !s.IsResume {
 		if _, err := os.Stat(resumeFile); !os.IsNotExist(err) {
 			log.Infof("Not enable resume, so remove resume file: %s", resumeFile)
 			if err := os.Remove(resumeFile); err != nil {
@@ -88,6 +103,7 @@ func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool
 	}
 	cfg.Database = resumeFile
 
+	log.Debugf("Torrent new session with config %+v", cfg)
 	ses, err := torrent.NewSession(cfg)
 	if err != nil {
 		return err
@@ -104,11 +120,11 @@ func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool
 		opt := &torrent.AddTorrentOptions{
 			StopAfterDownload: !enableSeeding,
 		}
-		if isURI(target) {
-			t, err = ses.AddURI(target, opt)
+		if isURI(s.Target) {
+			t, err = ses.AddURI(s.Target, opt)
 		} else {
 			var f *os.File
-			f, err = os.Open(target)
+			f, err = os.Open(s.Target)
 			if err != nil {
 				return err
 			}
@@ -145,8 +161,8 @@ func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool
 				stats.Speed.Download/1024, stats.Speed.Upload/1024, eta, stats.SeededFor.Truncate(time.Second).String(),
 			)
 			// 如果 maxSeedingSeconds 大于 0，则控制做种不能超过此值，对 isServe = true/false 均有效
-			if maxSeedingSeconds > 0 && stats.Status == torrent.Seeding && stats.SeededFor.Seconds() > float64(maxSeedingSeconds) {
-				log.Infof("Seeding max time %d is reached, stop seeding.", maxSeedingSeconds)
+			if s.MaxSeedingSeconds > 0 && stats.Status == torrent.Seeding && stats.SeededFor.Seconds() > float64(s.MaxSeedingSeconds) {
+				log.Infof("Seeding max time %d is reached, stop seeding.", s.MaxSeedingSeconds)
 				err = t.Stop()
 				if err != nil {
 					log.Errorf("Stop seeding error: %s", err)
@@ -154,7 +170,8 @@ func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool
 				}
 			}
 			// 如果开启了 seedingAutoStop，那么就检查 Tracker 中是否还有未完成的节点，如果有则停止
-			if seedingAutoStop && stats.Status == torrent.Seeding {
+			// Tracker 默认的最小检查周期是 1min，所以此处存在一定的延迟，所以除非文件很大或单节点的带宽较小，否则不建议开启下载后做种功能
+			if s.SeedingAutoStop && stats.Status == torrent.Seeding {
 				willStop := true
 				for _, tracker := range t.Trackers() {
 					log.Debugf(

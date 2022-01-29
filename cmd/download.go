@@ -26,17 +26,24 @@ p2pfile download <MAGNET_URI>`,
 			if viper.GetBool("seeding") {
 				seedingMaxTime = viper.GetInt("seeding-max-time")
 			}
-			err := libtorrent.RunTorrentServer(
-				args[0], viper.GetString("dir"), false, false,
-				seedingMaxTime, viper.GetBool("seeding-auto-stop"),
-			)
+			torrentServer := libtorrent.TorrentServer{
+				Target:             args[0],
+				DataDir:            viper.GetString("dir"),
+				IsServe:            false,
+				IsResume:           false,
+				MaxSeedingSeconds:  seedingMaxTime,
+				SeedingAutoStop:    viper.GetBool("seeding-auto-stop"),
+				SpeedLimitDownload: viper.GetFloat64("download-limit"),
+				SpeedLimitUpload:   viper.GetFloat64("upload-limit"),
+			}
+			err := torrentServer.Run()
 			if err != nil {
 				log.Fatal("Failed to run torrent server: ", err)
 			}
 		},
 	}
 	downloadCmd.Flags().SortFlags = false
-	downloadCmd.Flags().Bool("seeding", false, "Seeding after download")
+	downloadCmd.Flags().Bool("seeding", false, "Seeding after download, only set when file is too big or bandwith is limited.")
 	downloadCmd.Flags().Int("seeding-max-time", 600, "Seeding after download finish max time in seconds. default: 600(10min)")
 	downloadCmd.Flags().Bool("seeding-auto-stop", true, "Stop seeding after all nodes download finish. default: true")
 	downloadCmd.Flags().String("dir", "", "Set download dir. (default: .)")

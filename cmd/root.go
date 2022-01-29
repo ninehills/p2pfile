@@ -40,9 +40,13 @@ func init() {
 	rootCmd.PersistentFlags().SortFlags = false
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.p2pfile.yaml)")
+	rootCmd.PersistentFlags().Float64("download-limit", 0.0, "Set download limit, MiB. (default: 0.0)")
+	rootCmd.PersistentFlags().Float64("upload-limit", 0.0, "Set upload limit, MiB. (default: 0.0)")
 	rootCmd.PersistentFlags().Bool("debug", false, "Debug mode.")
 
 	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
+	viper.BindPFlag("upload-limit", rootCmd.PersistentFlags().Lookup("upload-limit"))
+	viper.BindPFlag("download-limit", rootCmd.PersistentFlags().Lookup("download-limit"))
 
 	rootCmd.AddCommand(newServeCmd())
 	rootCmd.AddCommand(newDownloadCmd())

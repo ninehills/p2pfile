@@ -43,6 +43,8 @@ Flags:
 Global Flags:
       --config string   config file (default is $HOME/.p2pfile.yaml)
       --debug           Debug mode.
+      --download-limit float   Set download limit, MiB. (default: 0.0)
+      --upload-limit float     Set upload limit, MiB. (default: 0.0)
 ```
 
 下载：
@@ -65,6 +67,8 @@ Flags:
 Global Flags:
       --config string   config file (default is $HOME/.p2pfile.yaml)
       --debug           Debug mode.
+      --download-limit float   Set download limit, MiB. (default: 0.0)
+      --upload-limit float     Set upload limit, MiB. (default: 0.0)
 ```
 
 ## 其他设计

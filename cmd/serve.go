@@ -57,7 +57,17 @@ p2pfile serve <FILE_PATH>`,
 			}
 			log.Infof("Magnet: %s", magnet)
 			// 3. Start torrent uploader
-			err = libtorrent.RunTorrentServer(torrentFile, viper.GetString("dir"), true, false, 0, false)
+			torrentServer := libtorrent.TorrentServer{
+				Target:             torrentFile,
+				DataDir:            viper.GetString("dir"),
+				IsServe:            true,
+				IsResume:           false,
+				MaxSeedingSeconds:  0,
+				SeedingAutoStop:    false,
+				SpeedLimitDownload: viper.GetFloat64("download-limit"),
+				SpeedLimitUpload:   viper.GetFloat64("upload-limit"),
+			}
+			err = torrentServer.Run()
 			if err != nil {
 				log.Fatal("Failed to run torrent server: ", err)
 			}
