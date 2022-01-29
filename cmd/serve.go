@@ -10,17 +10,21 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Tracker Room Name
+const trackerRoom = "1"
+
 func newServeCmd() *cobra.Command {
 	var serveCmd = &cobra.Command{
 		Use:   "serve",
-		Short: "creates and seeds a torrent from filepaths.",
-		Long: `Simple P2P file distribution CLI. Usage:
+		Short: "creates and seeds a torrent from file paths.",
+		Long: `Creates and seeds a torrent from file paths. Usage:
 
-p2pfile serve <FILE_PATH1> <FILE_PATH2> ...`,
+p2pfile serve <FILE_PATH>`,
 		Args: cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// TODO: 写入这里才生效，需要改进
-			initLogger(viper.GetBool("debug"))
+			debug := viper.GetBool("debug")
+			initLogger(debug)
 			file := args[0]
 
 			// 1. Start tracker
@@ -38,13 +42,14 @@ p2pfile serve <FILE_PATH1> <FILE_PATH2> ...`,
 					log.Infof("Founded available port: %v", trackerPort)
 				}
 			}
-			log.Infof("Start tracker: http://%s:%d/1/announce ", trackerIP, trackerPort)
-			go libtracker.RunTrackerServer(fmt.Sprintf(":%d", trackerPort))
+			trackerURL := fmt.Sprintf("http://%s:%d/%s/announce", trackerIP, trackerPort, trackerRoom)
+			log.Infof("Start tracker: %s (debug: %v)", trackerURL, debug)
+			go libtracker.RunTrackerServer(fmt.Sprintf(":%d", trackerPort), debug)
 
 			// 2. make torrent
 			torrentFile := file + ".torrent"
 			files := []string{file}
-			trackers := []string{fmt.Sprintf("http://%s:%d/1/announce", trackerIP, trackerPort)}
+			trackers := []string{trackerURL}
 			log.Infof("Make torrent %s to %s", file, torrentFile)
 			magnet, err := libtorrent.CreateTorrent(files, torrentFile, "", "", false, 0, "", trackers, []string{})
 			if err != nil {
@@ -52,12 +57,19 @@ p2pfile serve <FILE_PATH1> <FILE_PATH2> ...`,
 			}
 			log.Infof("Magnet: %s", magnet)
 			// 3. Start torrent uploader
-			err = libtorrent.RunTorrentServer(torrentFile, viper.GetString("dir"), true, false)
+			err = libtorrent.RunTorrentServer(torrentFile, viper.GetString("dir"), true, false, 0, false)
 			if err != nil {
 				log.Fatal("Failed to run torrent server: ", err)
 			}
-
 		},
 	}
+	serveCmd.Flags().SortFlags = false
+	serveCmd.Flags().String("tracker-ip", "", "Set tracker ip. (default: default route ip)")
+	serveCmd.Flags().Int("tracker-port", 0, "Set tracker port. (default: random port in port-range,  See --port-range)")
+	serveCmd.Flags().String("tracker-port-range", "42070-42099", "Set tracker random port range. (default: 42070-42099)")
+
+	viper.BindPFlag("tracker-ip", serveCmd.Flags().Lookup("tracker-ip"))
+	viper.BindPFlag("tracker-port", serveCmd.Flags().Lookup("tracker-port"))
+	viper.BindPFlag("tracker-port-range", serveCmd.Flags().Lookup("tracker-port-range"))
 	return serveCmd
 }

@@ -24,30 +24,47 @@
 
 ## 命令行设计
 
+做种：
+
 ```txt
-Simple P2P file distribution CLI. For example:
+Creates and seeds a torrent from file paths. Usage:
 
 p2pfile serve <FILE_PATH>
-p2pfile download <MAGNET_URI>
 
 Usage:
-  p2pfile [command]
-
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  download    Download file from magnet uri.
-  help        Help about any command
-  serve       creates and seeds a torrent from filepaths.
-  version     Print the version
+  p2pfile serve [flags]
 
 Flags:
-      --config string               config file (default is $HOME/.p2pfile.yaml)
       --tracker-ip string           Set tracker ip. (default: default route ip)
       --tracker-port int            Set tracker port. (default: random port in port-range,  See --port-range)
       --tracker-port-range string   Set tracker random port range. (default: 42070-42099) (default "42070-42099")
-      --dir string                  Set download dir. (default: .)
-      --debug                       Debug mode.
-  -h, --help                        help for p2pfile
+  -h, --help                        help for serve
+
+Global Flags:
+      --config string   config file (default is $HOME/.p2pfile.yaml)
+      --debug           Debug mode.
+```
+
+下载：
+
+```txt
+Download file from magnet uri. Usage:
+
+p2pfile download <MAGNET_URI>
+
+Usage:
+  p2pfile download [flags]
+
+Flags:
+      --seeding                Seeding after download
+      --seeding-max-time int   Seeding after download finish max time in seconds. default: 600(10min) (default 600)
+      --seeding-auto-stop      Stop seeding after all nodes download finish. default: true (default true)
+      --dir string             Set download dir. (default: .)
+  -h, --help                   help for download
+
+Global Flags:
+      --config string   config file (default is $HOME/.p2pfile.yaml)
+      --debug           Debug mode.
 ```
 
 ## 其他设计
@@ -78,7 +95,6 @@ D. 任务中断恢复：
 1. resume download
 2. tracker ha
 3. multi file
-4. download and upload speed limit
 
 ## 参考资料
 

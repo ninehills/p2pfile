@@ -40,16 +40,8 @@ func init() {
 	rootCmd.PersistentFlags().SortFlags = false
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.p2pfile.yaml)")
-	rootCmd.PersistentFlags().String("tracker-ip", "", "Set tracker ip. (default: default route ip)")
-	rootCmd.PersistentFlags().Int("tracker-port", 0, "Set tracker port. (default: random port in port-range,  See --port-range)")
-	rootCmd.PersistentFlags().String("tracker-port-range", "42070-42099", "Set tracker random port range. (default: 42070-42099)")
-	rootCmd.PersistentFlags().String("dir", "", "Set download dir. (default: .)")
 	rootCmd.PersistentFlags().Bool("debug", false, "Debug mode.")
 
-	viper.BindPFlag("tracker-ip", rootCmd.PersistentFlags().Lookup("tracker-ip"))
-	viper.BindPFlag("tracker-port", rootCmd.PersistentFlags().Lookup("tracker-port"))
-	viper.BindPFlag("tracker-port-range", rootCmd.PersistentFlags().Lookup("tracker-port-range"))
-	viper.BindPFlag("dir", rootCmd.PersistentFlags().Lookup("dir"))
 	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 
 	rootCmd.AddCommand(newServeCmd())

@@ -8,7 +8,10 @@ import (
 	"github.com/jackpal/bencode-go"
 )
 
-func RunTrackerServer(addr string) {
+func RunTrackerServer(addr string, debug bool) {
+	if !debug {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	r := gin.Default()
 	r.GET("/:room/announce", announce)
 	r.GET("/:room/scrape", scrape)

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -18,14 +19,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func RunTorrentServer(target string, dataDir string, isSeed bool, isResume bool) error {
+// @param target: 种子文件或 Magnet URI
+// @param dataDir: 下载路径
+// @param isServe: 是否为做种节点，如是则调大连接数等参数。
+// @param isResume: 是否通过 *.resume 文件恢复下载
+// @param maxSeedingSeconds: 下载完成做种的最大时间，超过后做种停止。单位为秒。默认为 0s。
+//			- 如 isServe = true，那么 maxSeedingSeconds 如等于 0，则代表永不停止（此逻辑上层暂时没有使用）
+//			- 如 isServe = false，那么 maxSeedingSeconds 如等于 0，则代表不做种
+// @param seedingAutoStop: 当注册到 Tracker 的所有节点下载完成后，是否自动停止做种。（和 isServe 互斥）
+func RunTorrentServer(target string, dataDir string, isServe bool, isResume bool, maxSeedingSeconds int, seedingAutoStop bool) error {
 	cfg := torrent.DefaultConfig
 	cfg.RPCEnabled = false
 	cfg.DHTEnabled = false
 	cfg.DataDir = dataDir
 	cfg.DataDirIncludesTorrentID = false
 
-	if isSeed {
+	if isServe {
 		// 做种的节点调大连接数等配置
 		cfg.UnchokedPeers = 100
 		cfg.OptimisticUnchokedPeers = 10
@@ -36,17 +45,22 @@ func RunTorrentServer(target string, dataDir string, isSeed bool, isResume bool)
 		cfg.MaxPeerDial = 1000
 		cfg.MaxPeerAccept = 500
 		cfg.MaxPeerAddresses = 20000
+
+		if seedingAutoStop {
+			return fmt.Errorf("seedingAutoStop can't be true when isServe is true")
+		}
 	}
+	enableSeeding := isServe || maxSeedingSeconds > 0
 
 	var ih torrent.InfoHash
-	var resumeFile string
+	var resumeFileName string
 	if isURI(target) {
 		magnet, err := magnet.New(target)
 		if err != nil {
 			return err
 		}
 		ih = torrent.InfoHash(magnet.InfoHash)
-		resumeFile = magnet.Name + ".resume"
+		resumeFileName = magnet.Name + ".resume"
 	} else {
 		f, err := os.Open(target)
 		if err != nil {
@@ -59,8 +73,11 @@ func RunTorrentServer(target string, dataDir string, isSeed bool, isResume bool)
 		}
 		_ = f.Close()
 		ih = mi.Info.Hash
-		resumeFile = mi.Info.Name + ".resume"
+		resumeFileName = mi.Info.Name + ".resume"
 	}
+	resumeFile := path.Join(dataDir, resumeFileName)
+	log.Infof("Download resume file: %s, it will be auto delete when download finished.", resumeFile)
+
 	if !isResume {
 		if _, err := os.Stat(resumeFile); !os.IsNotExist(err) {
 			log.Infof("Not enable resume, so remove resume file: %s", resumeFile)
@@ -85,7 +102,7 @@ func RunTorrentServer(target string, dataDir string, isSeed bool, isResume bool)
 	} else {
 		// Add as new torrent
 		opt := &torrent.AddTorrentOptions{
-			StopAfterDownload: !isSeed,
+			StopAfterDownload: !enableSeeding,
 		}
 		if isURI(target) {
 			t, err = ses.AddURI(target, opt)
@@ -122,12 +139,52 @@ func RunTorrentServer(target string, dataDir string, isSeed bool, isResume bool)
 			if stats.ETA != nil {
 				eta = stats.ETA.String()
 			}
-			log.Infof("Status: %s, Progress: %d%%, Peers: %d, Speed: %dK/s, ETA: %s\n", stats.Status.String(), progress, stats.Peers.Total, stats.Speed.Download/1024, eta)
+			log.Infof(
+				"Status: %s, Progress: %d%%, Peers: %d(%din/%dout), Download: %dK/s, Upload: %dK/s, ETA: %s, Seeding: %s\n",
+				stats.Status.String(), progress, stats.Peers.Total, stats.Peers.Incoming, stats.Peers.Outgoing,
+				stats.Speed.Download/1024, stats.Speed.Upload/1024, eta, stats.SeededFor.Truncate(time.Second).String(),
+			)
+			// 如果 maxSeedingSeconds 大于 0，则控制做种不能超过此值，对 isServe = true/false 均有效
+			if maxSeedingSeconds > 0 && stats.Status == torrent.Seeding && stats.SeededFor.Seconds() > float64(maxSeedingSeconds) {
+				log.Infof("Seeding max time %d is reached, stop seeding.", maxSeedingSeconds)
+				err = t.Stop()
+				if err != nil {
+					log.Errorf("Stop seeding error: %s", err)
+					return err
+				}
+			}
+			// 如果开启了 seedingAutoStop，那么就检查 Tracker 中是否还有未完成的节点，如果有则停止
+			if seedingAutoStop && stats.Status == torrent.Seeding {
+				willStop := true
+				for _, tracker := range t.Trackers() {
+					log.Debugf(
+						"tracker: %s status:%d leechers:%d seeders: %d LastAnnounce:%s",
+						tracker.URL, tracker.Status, tracker.Leechers, tracker.Seeders, tracker.LastAnnounce.String())
+					if tracker.Leechers > 0 {
+						willStop = false
+						break
+					}
+				}
+				if willStop {
+					log.Infof("All tracker has no leechers, stop seeding.")
+					err = t.Stop()
+					if err != nil {
+						log.Errorf("Stop seeding error: %s", err)
+						return err
+					}
+				}
+			}
 		case err = <-t.NotifyStop():
+			if err != nil {
+				log.Warnf("Torrent stopped: %s", err)
+				return err
+			}
+			// TODO: 只有下载完成才应该删除 resumeFile
+			log.Infof("Torrent stopped normally, so remove resume file")
 			if _, err := os.Stat(resumeFile); !os.IsNotExist(err) {
 				os.Remove(resumeFile)
 			}
-			return err
+			return nil
 		}
 	}
 }
